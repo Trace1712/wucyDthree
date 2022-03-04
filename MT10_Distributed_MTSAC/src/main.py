@@ -1,14 +1,12 @@
 from player import Player
 from learner import Learner
-import metaworld
 import ray
 import os
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-cfg_path = 'cfg/MT10_Distributed_MTSAC_cfg.json'
-MT10 = metaworld.MT10()
+cfg_path = '../../cfg/Distributed_MTSAC_cfg_humanoid'
 train_classes = "walker"
 train_tasks = ['walk', 'run', 'stand']
 
@@ -39,7 +37,7 @@ if is_train:
                 train_tasks, 
                 cfg_path, 
                 task_idx_list,
-                eval_episode_idx=40
+                eval_episode_idx=10
             )
         )
     networks.append(Learner.remote(train_classes, train_tasks, cfg_path, save_period=20000))

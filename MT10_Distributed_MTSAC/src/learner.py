@@ -37,7 +37,7 @@ class Learner():
         self.critic_cfg = self.cfg['critic']
         self.set_cfg_parameters(save_period, write_mode)
 
-        self.server = redis.StrictRedis(host='localhost')
+        self.server = redis.StrictRedis(host='localhost', password='5241590000000000')
         for key in self.server.scan_iter():
             self.server.delete(key)    
             
