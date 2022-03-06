@@ -44,7 +44,6 @@ class Player():
         self.set_cfg_parameters()
         self.run_id = run_id
         self.write_mode = write_mode
-
         self.server = redis.StrictRedis(host='localhost', password='5241590000000000')
         for key in self.server.scan_iter():
             self.server.delete(key)

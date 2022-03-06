@@ -1,3 +1,4 @@
+import argparse
 import datetime
 
 from player import Player
@@ -44,6 +45,7 @@ if __name__ == '__main__':
     ############## you need to set ##############
 
     networks = []
+    aux = ["cr"]
     if is_train:
         for task_idx_list in task_distributions:
             networks.append(
@@ -53,7 +55,8 @@ if __name__ == '__main__':
                     cfg_path,
                     task_idx_list,
                     eval_episode_idx=10,
-                    run_id=run_id
+                    run_id=run_id,
+                    aux = aux
                 )
             )
         networks.append(Learner.remote(train_classes, train_tasks, cfg_path, save_period=20000))
