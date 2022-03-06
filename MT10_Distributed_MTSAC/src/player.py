@@ -10,7 +10,7 @@ import redis
 import _pickle
 import pandas as pd
 import numpy as np
-
+from dm_control import suite
 class Player():
     def __init__(self,
                  train_classes,
@@ -138,7 +138,7 @@ class Player():
     def eval_policy(self, task_idx, eval_episodes=5, step=100):
         avg_reward = 0.
         env_eval = suite.load(domain_name=self.train_classes, task_name=self.train_tasks[task_idx])
-        info = pd.read_csv("{}/{}-{}".format("model", self.train_classes, self.train_tasks[task_idx]))
+        info = pd.read_csv("../model/{}-{}.csv".format(self.train_classes, self.train_tasks[task_idx]))
         num = info["reward"].tolist()
         for i in range(eval_episodes):
             time_step = env_eval.reset()
@@ -155,7 +155,7 @@ class Player():
 
         avg_reward /= eval_episodes
         info.loc[len(num)] = [int(step), avg_reward]
-        info.to_csv("{}/{}-{}".format("model", self.train_classes, self.train_tasks[task_id]), index=False)
+        info.to_csv("../model/{}-{}.csv".format(self.train_classes, self.train_tasks[task_idx]), index=False)
         print("***************************************")
         stat = str("Teacher {} over {} reward: {:.3f} in 0".format("1", eval_episodes, avg_reward))
         print(stat)
@@ -279,6 +279,13 @@ class Player():
 
         # initial parameter copy
         self.pull_parameters()
+        col_name = ["episode", "reward"]
+
+        for task in self.train_tasks:
+            f = pd.DataFrame(columns=col_name, data=None)
+            # import os
+            # os.m
+            f.to_csv("../model/{}-{}.csv".format(self.train_classes, task), index=False)
 
         while True:
 

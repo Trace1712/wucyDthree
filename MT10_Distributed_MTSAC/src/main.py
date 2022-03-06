@@ -6,17 +6,17 @@ import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-cfg_path = '../../cfg/Distributed_MTSAC_cfg_humanoid'
+cfg_path = '../../cfg/Distributed_MTSAC_cfg_humanoid.json'
 train_classes = "walker"
 train_tasks = ['walk', 'run', 'stand']
 
 is_train = True ############## you need to set
 # is_train = False ############## you need to set
 
-num_cpus = 3 ############## you need to set
-num_gpus = 1 ############## you need to set 
-Player = ray.remote(num_cpus=3, num_gpus=0.15)(Player) ############## you need to set 
-Learner = ray.remote(num_cpus=2, num_gpus=0.3)(Learner) ############## you need to set 
+num_cpus = 2 ############## you need to set
+num_gpus = 0 ############## you need to set
+Player = ray.remote(num_cpus=1, num_gpus=0)(Player) ############## you need to set
+Learner = ray.remote(num_cpus=1, num_gpus=0)(Learner) ############## you need to set
 ray.init(num_cpus=num_cpus, num_gpus=num_gpus)
 
 

@@ -1,7 +1,7 @@
 {    
     "use_weighted_loss" : true,
-
-    "device" : "cuda",
+    "num_tasks": 3,
+    "device" : "cpu",
     "buffer_size" : 1e6,
     "reward_scale" : 1,
     "batch_size" : 1280,
@@ -13,11 +13,12 @@
     "print_period_player" : 2,
     "print_period_learner" : 10,
     "gamma" : 0.99,
-
+    "max_episode_time" : 10000,
     "actor" : {
         "state_dim" : 24,
         "action_dim" : 6,
         "lr_actor" : 3e-4,
+        "action_bound" : [-1.0, 1.0],
         "actor_hidden_dim" : [400, 400, 400]
     },
 
