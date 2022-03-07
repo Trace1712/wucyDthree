@@ -1,23 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-from distributional import create_p_categorical
-from model_utils import HeadBase, ResNetBlock, NoisyLinear
-from modules import Conv2d
+from model_utils import HeadBase
 
-from functools import partial
-
-
-# ---
 
 def dist(a, b):
     batch = a.shape[0]
     assert batch == b.shape[0]
     return F.pairwise_distance(a.view(batch, -1), b.view(batch, -1))
 
-
-# ---
 
 class LossBase(HeadBase):
     def __init__(self, name, tid, args, action_space, conv_output_size):
@@ -56,8 +47,6 @@ class MyInverseDynamicLoss(LossBase):
         return F.mse_loss(self.fc_z(self.fc_h(temp)), state)
 
 
-# class M
-
 class InverseDynamicLoss(LossBase):
     def __init__(self, name, tid, args, action_space):
         super().__init__(name, tid, args, action_space, args.conv_output_size)
@@ -71,13 +60,13 @@ class InverseDynamicLoss(LossBase):
         return F.cross_entropy(a, actions.squeeze(1).long(), reduction='none')
 
 
-class CategoricalRewardLoss(LossBase):
+class AttackRewardLoss(LossBase):
     def __init__(self, name, tid, args, action_space):
         super().__init__(name, tid, args, action_space, args.conv_output_size)
         self.fc_z = nn.Linear(args.state_dim + 10, args.hidden_size)
         self.hc_z = nn.Linear(args.hidden_size, action_space)
 
-    def forward(self, state, actor,critic,critic_optim,actor_optim,actions):
+    def forward(self, state, actor, critic, critic_optim, actor_optim, actions):
         # Backward compatibility, use values read in config file
         attack_epsilon = 0.075
         attack_stepsize = 0.0075
@@ -93,9 +82,9 @@ class CategoricalRewardLoss(LossBase):
         state_lb = ori_state_tensor - attack_epsilon
         for _ in range(attack_iteration):
             state = torch.tensor(state, dtype=torch.float32, requires_grad=True)
-            action,_ = actor(state)
+            action, _ = actor(state)
 
-            qval,_ = critic.forward(ori_state_tensor, action)
+            qval, _ = critic.forward(ori_state_tensor, action)
             loss = torch.mean(qval)
             loss.backward()
             adv_state = state - attack_stepsize * state.grad.sign()
@@ -107,71 +96,8 @@ class CategoricalRewardLoss(LossBase):
         raction = self.hc_z(self.fc_z(state))
         return F.mse_loss(raction, actions)
 
-    def to_np(self,t):
+    def to_np(self, t):
         return t.cpu().detach().numpy()
-
-
-class CategoricalIntensityLoss(LossBase):
-    def __init__(self, name, tid, args, action_space):
-        super().__init__(name, tid, args, action_space, args.conv_output_size)
-        linear = '-l' in name
-        if linear:
-            print('Linear CI')
-            self.net = nn.Linear(self.conv_output_size, action_space * self.args.intensity_atoms)
-        else:
-            self.net = nn.Sequential(
-                nn.Linear(args.state_dim + 10, args.hidden_size), nn.ReLU(),
-                nn.Linear(args.hidden_size, action_space)
-            )
-
-        self.distrib = create_p_categorical(a=0, b=84, n=args.intensity_atoms, sigma=args.intensity_sigma)
-
-    def intensity(self, x1, x2):
-        # assert x1.min() >= 0 and x1.max() <= 1
-        diff = dist(x1.mean(1), x2.mean(1)).squeeze()
-        # assert torch.all(diff <= 84)
-        return diff
-
-    def forward(self, x, actions, x1, x2):
-        # with torch.no_grad():
-        #     intensities = self.intensity(x1, x2)
-        #     intensities = self.distrib(intensities.squeeze())
-        i = self.net(x).view(-1, self.action_space)
-        i = F.log_softmax(i, dim=1)
-        # i = i[range(self.args.batch_size), actions]
-        return -torch.sum(i * actions, 1)
-
-
-class DiscountModel(HeadBase):
-    def __init__(self, args, action_space):
-        super().__init__(args, action_space)
-        self.fc_z_v = NoisyLinear(args.hidden_size, self.atoms, std_init=args.noisy_std)
-        self.fc_z_a = NoisyLinear(args.hidden_size, action_space * self.atoms, std_init=args.noisy_std)
-
-    def q(self, hv, ha, log=False):
-        v = self.fc_z_v(hv).view(-1, 1, self.atoms)
-        a = self.fc_z_a(ha).view(-1, self.action_space, self.atoms)
-        q = v + a - a.mean(1, keepdim=True)
-        if log:
-            q = F.log_softmax(q, dim=2)
-        else:
-            q = F.softmax(q, dim=2)
-        return q
-
-    def forward(self, x, log=False, model=None):
-        out = model(x, log=log, return_tuple=True)
-        return self.q(out['hv'], out['ha'], log=log)
-
-
-class DiscountLoss(LossBase):
-    def __init__(self, name, tid, args, action_space):
-        super().__init__(name, tid, args, action_space, args.conv_output_size)
-        self.fc_h = nn.Linear(args.state_dim + 10 + action_space, args.hidden_size)
-        self.fc_z = nn.Linear(args.hidden_size, 1)
-
-    def forward(self, state, actions,reward):
-        temp = torch.cat([actions, state], dim=1)
-        return F.mse_loss(self.fc_z(self.fc_h(temp)), reward)
 
 
 class MomentChangesLoss(LossBase):
@@ -186,8 +112,8 @@ class MomentChangesLoss(LossBase):
                             torch.zeros(1, 1, self.hidden_layer_size))
 
         super().__init__(name, tid, args, action_space, args.conv_output_size)
-        self.fc_h = nn.Linear(args.state_dim + 10 + action_space,args.hidden_size)
-        self.fc_z = nn.Linear(args.hidden_size,args.state_dim + 10)
+        self.fc_h = nn.Linear(args.state_dim + 10 + action_space, args.hidden_size)
+        self.fc_z = nn.Linear(args.hidden_size, args.state_dim + 10)
 
     def forward(self, state, actions, next_state):
         temp = torch.cat([actions, next_state], dim=1)
@@ -200,35 +126,26 @@ def get_loss_by_name(name):
         hidden size
         """
         return InverseDynamicLoss
-    elif name == 'categorical_reward' or name == 'cr':
+    elif name == 'attack_reward' or name == 'ar':
         """
-        hidden size 
-        reward_atoms
-        reward_sigma
+        模型攻击奖励（鲁棒任务）
         """
-        return CategoricalRewardLoss
+        return AttackRewardLoss
     elif name == 'moment_changes' or name == 'mc':
         """
-        hidden size
-        device
+        瞬时变化奖励（正向任务）
         """
         return MomentChangesLoss
-    elif 'categorical_intensity' in name or 'ci' in name:
-        """
-        hidden size
-        intensity_atoms
-        intensity_sigma
-        """
-        return CategoricalIntensityLoss
-    elif 'discount' in name or 'dsc' in name:
-        return DiscountLoss
-
     elif "MyInverseDynamicLoss" == name:
+        """
+        逆向动力学模型（正向任务）
+        """
         return MyInverseDynamicLoss
     elif "DiverseDynamicLoss" == name:
+        """
+        正向动力学模型（正向任务）
+        """
         return DiverseDynamicLoss
-    else:
-        raise NotImplementedError
 
 
 def get_aux_loss(name, *args):

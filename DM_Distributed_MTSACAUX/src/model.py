@@ -194,3 +194,83 @@ class Critic(nn.Module):
         loss_2 = torch.mean(loss_2)
                         
         return loss_1, loss_2
+
+
+# continuous action space
+class CriticRobust(nn.Module):
+    '''
+    Params
+        critic_cfg : configuration for critic model
+    '''
+
+    def __init__(self, critic_cfg, num_tasks):
+        super(CriticRobust, self).__init__()
+        self.critic_cfg = critic_cfg
+
+        self.num_tasks = num_tasks
+        self.state_dim = int(critic_cfg['state_dim'])
+        self.mtobs_dim = self.state_dim + num_tasks
+        self.action_dim = int(critic_cfg['action_dim'])
+
+        self.build_model(critic_cfg)
+
+    def build_model(self, critic_cfg):
+        self.Q_function_1 = build_mlp(
+            input_dim=self.mtobs_dim + self.action_dim,
+            output_dim=1,
+            hidden_dims=critic_cfg['critic_hidden_dim']
+        )
+        self.Q_function_1.apply(weights_init)
+
+        self.Q_function_2 = build_mlp(
+            input_dim=self.mtobs_dim + self.action_dim,
+            output_dim=1,
+            hidden_dims=critic_cfg['critic_hidden_dim']
+        )
+        self.Q_function_2.apply(weights_init)
+
+    def forward(self, mtobss: torch.Tensor, action: torch.Tensor):
+        x = torch.cat([mtobss, action], dim=-1)
+
+        return self.Q_function_1(x), self.Q_function_2(x)
+
+    def cal_loss(self,
+                 mtobss: torch.Tensor,
+                 action,
+                 td_target_values,
+                 use_weighted_loss=False,
+                 alphas=None,
+                 ):
+        '''
+        inputs :
+            mtobss = (batch_size, mtobss_dim)
+            action = (batch_size, action_dim)
+            td_target_values = (batch_size, 1)
+            use_weighted_loss (bool)
+                calculate loss by weights where low confidence tasks
+                have high weights for training
+            alphas = (num_tasks, )
+        outputs :
+            critic_loss = (tensor)
+        '''
+
+        current_value_1, current_value_2 = self.forward(mtobss, action)
+        loss_1 = (td_target_values - current_value_1) ** 2
+        loss_2 = (td_target_values - current_value_2) ** 2
+
+        if use_weighted_loss and alphas is not None:
+            assert alphas.shape[0] == self.num_tasks, "alphas shape should be (num_tasks, )"
+            one_hots = mtobss[:, -self.num_tasks:]  # one_hots = (batch_size, num_tasks)
+            task_indicies = torch.argmax(one_hots, dim=1)
+
+            weights = F.softmax(-alphas, dim=0)  # (num_tasks, )
+            weights = weights[task_indicies].detach()
+            weights = weights / weights.sum()
+
+            loss_1 = (weights * loss_1)
+            loss_2 = (weights * loss_2)
+
+        loss_1 = torch.mean(loss_1)
+        loss_2 = torch.mean(loss_2)
+
+        return loss_1, loss_2

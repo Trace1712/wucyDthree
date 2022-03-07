@@ -55,11 +55,10 @@ if __name__ == '__main__':
                     cfg_path,
                     task_idx_list,
                     eval_episode_idx=10,
-                    run_id=run_id,
-                    aux = aux
+                    run_id=run_id
                 )
             )
-        networks.append(Learner.remote(train_classes, train_tasks, cfg_path, save_period=20000))
+        networks.append(Learner.remote(train_classes, train_tasks, cfg_path, save_period=20000, action_dim=4, aux_lst=aux))
         print('Learner added')
     else:
         task_idx_list = [4]  ############## you need to set

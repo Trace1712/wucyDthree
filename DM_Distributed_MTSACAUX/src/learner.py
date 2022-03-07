@@ -15,21 +15,22 @@ from utils import cfg_read
 import redis
 import _pickle
 import copy
-
+from aux_agent import Auxagent
 from logger import Logger
 
 
 class Learner():
-    def __init__(self, 
-            train_classes,
-            train_tasks,
-            cfg_path,
-            write_mode=True,
-            save_period=50000,
-            checkpoint_path=None,
-            aux_lst=None,
-            args=None
-        ):
+    def __init__(self,
+                 train_classes,
+                 train_tasks,
+                 cfg_path,
+                 write_mode=True,
+                 save_period=50000,
+                 checkpoint_path=None,
+                 action_dim=None,
+                 aux_lst=None,
+                 args=None
+                 ):
 
         self.train_classes = train_classes
         self.train_tasks = train_tasks
@@ -39,43 +40,43 @@ class Learner():
         self.critic_cfg = self.cfg['critic']
         self.set_cfg_parameters(save_period, write_mode)
         self.aux_agent = Auxagent(action_dim, aux_lst, args)
-
+        self.action_dim = action_dim
         self.server = redis.StrictRedis(host='localhost', password='5241590000000000')
         for key in self.server.scan_iter():
-            self.server.delete(key)    
-            
+            self.server.delete(key)
+
         self.build_model()
         self.to_device()
         self.build_optimizer()
 
         self.memory = ReplayBuffer(
-            buffer_size=self.buffer_size, 
-            batch_size=self.batch_size, 
-            seed=0, 
-            device=self.device, 
+            buffer_size=self.buffer_size,
+            batch_size=self.batch_size,
+            seed=0,
+            device=self.device,
             server=self.server,
             num_tasks=self.num_tasks
         )
-        self.memory.start() # start thread's activity
+        self.memory.start()  # start thread's activity
 
         self.logger = Logger(writer=self.writer, cfg_path=cfg_path, server=self.server)
-        self.logger.start() # start thread's activity
+        self.logger.start()  # start thread's activity
 
         if checkpoint_path is not None:
             self.load_checkpoint(checkpoint_path)
             print('######## load checkpoint completely ########')
-    
+
     def set_cfg_parameters(self, save_period, write_mode):
         self.gamma = self.cfg['gamma']
         self.lr_actor = self.actor_cfg['lr_actor']
         self.lr_critic = self.critic_cfg['lr_critic']
         self.device = torch.device(self.cfg['device'])
         self.batch_size = int(self.cfg['batch_size'])
-        self.tau = self.cfg['tau']                     # soft update parameter
-        self.reward_scale = self.cfg['reward_scale']    
+        self.tau = self.cfg['tau']  # soft update parameter
+        self.reward_scale = self.cfg['reward_scale']
         self.start_memory_len = self.cfg['start_memory_len']
         self.buffer_size = int(self.cfg['buffer_size'])
-        self.num_tasks = int(self.cfg['num_tasks'])         #### MT SAC ####
+        self.num_tasks = int(self.cfg['num_tasks'])  #### MT SAC ####
         self.update_delay = int(self.cfg['update_delay'])
         self.print_period = int(self.cfg['print_period_learner']) * self.update_delay
         self.total_step = 0
@@ -83,18 +84,18 @@ class Learner():
         self.update_iteration = 0
         self.datetime = str(datetime.now())[:-7]
         self.use_weighted_loss = self.cfg['use_weighted_loss']
-      
-        if self.use_weighted_loss:            
+
+        if self.use_weighted_loss:
             print('############## This is modified version of MTSAC ##############')
             print('############## Use weighted loss                 ##############')
 
-        self.max_episode_time = int(self.cfg['max_episode_time']) 
+        self.max_episode_time = int(self.cfg['max_episode_time'])
 
-        self.log_file = './log/log_MT10_Distributed_MTSAC/MT10_Distributed_MTSAC_log_{}.txt'.format(
+        self.log_file = './log/log_DM_Distributed_MTSACAUX/DM_Distributed_MTSACAUX_log_{}.txt'.format(
             self.datetime
         )
-        
-        self.save_model_path = 'saved_models/MT10_Distributed_MTSAC/{}/'.format(
+
+        self.save_model_path = 'saved_models/DM_Distributed_MTSACAUX/{}/'.format(
             self.datetime
         )
 
@@ -105,36 +106,36 @@ class Learner():
         self.write_mode = write_mode
         if self.write_mode:
             self.writer = SummaryWriter(
-                './log/log_MT10_Distributed_MTSAC/{}'.format(self.datetime)
+                './log/log_DM_Distributed_MTSACAUX/{}'.format(self.datetime)
             )
 
     def build_model(self):
         self.actor = Actor(self.actor_cfg, self.num_tasks)
-        
+
         self.local_critic = Critic(self.critic_cfg, self.num_tasks)
         self.target_critic = Critic(self.critic_cfg, self.num_tasks)
-       
-        self.H_bar = torch.tensor([-self.actor.action_dim]).to(self.device).float() # minimum entropy
+
+        self.H_bar = torch.tensor([-self.actor.action_dim]).to(self.device).float()  # minimum entropy
         self.log_alpha = nn.Parameter(
             torch.tensor([float(self.cfg['log_alpha'])] * self.num_tasks,
-            requires_grad=True, 
-            device=self.device
-            ).float()
-        ) 
+                         requires_grad=True,
+                         device=self.device
+                         ).float()
+        )
         self.alpha = self.log_alpha.exp().detach()
 
-    def build_optimizer(self):        
+    def build_optimizer(self):
         # 1. actor optimizer
         self.actor_optimizer = optim.Adam(
-            self.actor.parameters(), 
+            self.actor.parameters(),
             lr=self.lr_actor
         )
 
         # 2. critic optimizer
         self.critic_optimizer = optim.Adam(
-            self.local_critic.parameters(), 
+            self.local_critic.parameters(),
             lr=self.lr_critic
-        ) 
+        )
 
         # 3. log_alpha optimizer
         self.log_alpha_optimizer = optim.Adam([self.log_alpha], lr=self.lr_actor)
@@ -150,32 +151,32 @@ class Learner():
             tau (float): interpolation parameter 
         """
         for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
-            target_param.data.copy_(tau*local_param.data + (1.0-tau)*target_param.data)
-    
+            target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
+
     def my_print(self, content):
         with open(self.log_file, 'a') as writer:
             print(content)
-            writer.write(content+'\n')
+            writer.write(content + '\n')
 
     def save_checkpoint(self, update_iteration):
         state = {
-            'update_iteration' : update_iteration,
-            'total_step' : self.total_step,
+            'update_iteration': update_iteration,
+            'total_step': self.total_step,
 
-            'local_critic' : {k: v.cpu() for k, v in self.local_critic.state_dict().items()},          
-            'critic_optimizer' : self.critic_optimizer.state_dict(),
+            'local_critic': {k: v.cpu() for k, v in self.local_critic.state_dict().items()},
+            'critic_optimizer': self.critic_optimizer.state_dict(),
 
-            'target_critic' : {k: v.cpu() for k, v in self.target_critic.state_dict().items()},
+            'target_critic': {k: v.cpu() for k, v in self.target_critic.state_dict().items()},
 
-            'actor' : {k: v.cpu() for k, v in self.actor.state_dict().items()},
-            'actor_optimizer' : self.actor_optimizer.state_dict(),
+            'actor': {k: v.cpu() for k, v in self.actor.state_dict().items()},
+            'actor_optimizer': self.actor_optimizer.state_dict(),
 
-            'log_alpha' : self.log_alpha.cpu(),
-            'log_alpha_optimizer' : self.log_alpha_optimizer.state_dict(),
-            'alpha' : self.alpha.cpu()                
+            'log_alpha': self.log_alpha.cpu(),
+            'log_alpha_optimizer': self.log_alpha_optimizer.state_dict(),
+            'alpha': self.alpha.cpu()
         }
-        torch.save(state, self.save_model_path+'checkpoint_{}.tar'.format(str(update_iteration))) 
-        
+        torch.save(state, self.save_model_path + 'checkpoint_{}.tar'.format(str(update_iteration)))
+
     def load_checkpoint(self, path):
         checkpoint = torch.load(path, map_location=self.device)
         self.update_iteration = checkpoint['update_iteration']
@@ -191,17 +192,17 @@ class Learner():
         self.log_alpha.data = checkpoint['log_alpha']
         self.log_alpha_optimizer.load_state_dict(checkpoint['log_alpha_optimizer'])
         self.alpha.data = checkpoint['alpha']
-        
-    def to_device(self):        
+
+    def to_device(self):
         self.actor.to(self.device)
         self.local_critic.to(self.device)
         self.target_critic.to(self.device)
 
     def push_log(self, update_iteration, critic_loss, actor_loss, entropy):
-        
+
         critic_loss_data = (update_iteration, critic_loss)
         self.server.rpush('critic_loss', _pickle.dumps(critic_loss_data))
-        
+
         actor_loss_data = (update_iteration, actor_loss)
         self.server.rpush('actor_loss', _pickle.dumps(actor_loss_data))
 
@@ -210,9 +211,10 @@ class Learner():
 
         alphas = self.log_alpha.exp().detach().cpu().numpy()
         alphas_data = (update_iteration, alphas)
-        self.server.rpush('alpha', _pickle.dumps(alphas_data))        
-            
-    #### MT SAC ####
+        self.server.rpush('alpha', _pickle.dumps(alphas_data))
+
+        #### MT SAC ####
+
     def get_log_alpha(self, mtobss):
         '''
         input :
@@ -223,17 +225,18 @@ class Learner():
         '''
         assert mtobss.shape[-1] == self.actor.mtobs_dim, \
             'Input should be mtobss whose shape is (batch_size, mtobs_dim).'
-        
-        one_hots = mtobss[:, -self.num_tasks:] # one_hots = (batch_size, num_tasks)
+
+        one_hots = mtobss[:, -self.num_tasks:]  # one_hots = (batch_size, num_tasks)
         assert one_hots.shape[1] == self.num_tasks, \
             'The number of tasks does not match self.num_tasks'
 
-        log_alpha = self.log_alpha # self.log_alpha = (num_tasks, )
+        log_alpha = self.log_alpha  # self.log_alpha = (num_tasks, )
 
         # (batch_size, num_tasks) * (num_tasks, 1) -> (batch_size, 1)
-        log_alpha = torch.matmul(one_hots, log_alpha.unsqueeze(dim=0).t()) 
+        log_alpha = torch.matmul(one_hots, log_alpha.unsqueeze(dim=0).t())
 
         return log_alpha
+
     #### MT SAC ####
 
     def taskIdx2oneHot(self, taskIdx):
@@ -253,15 +256,15 @@ class Learner():
         mtobs = np.concatenate((state, one_hot), axis=0)
         return mtobs
 
-    def update_SAC(self, 
-        mtobss, 
-        actions, 
-        rewards, 
-        next_mtobss, 
-        dones, 
-        alpha,
-        aux_agent
-    ):
+    def update_SAC(self,
+                   mtobss,
+                   actions,
+                   rewards,
+                   next_mtobss,
+                   dones,
+                   alpha,
+                   aux_agent
+                   ):
         # Compute targets for the Q functions
         with torch.no_grad():
             sampled_next_actions, next_log_probs, _ = self.actor.get_action_log_prob_log_std(
@@ -271,21 +274,21 @@ class Learner():
                 mtobss=next_mtobss,
                 action=sampled_next_actions
             )
-            y = self.reward_scale*rewards + self.gamma * (1-dones)*(
-                torch.min(Q_target_1, Q_target_2).detach() - alpha*next_log_probs
+            y = self.reward_scale * rewards + self.gamma * (1 - dones) * (
+                torch.min(Q_target_1, Q_target_2).detach() - alpha * next_log_probs
             )
 
         # Update Q-functions by one step of gradient descent   
         Q_loss_1, Q_loss_2 = self.local_critic.cal_loss(
             mtobss=mtobss,
-            action=actions, 
+            action=actions,
             td_target_values=y,
             use_weighted_loss=self.use_weighted_loss,
             alphas=self.log_alpha.exp().detach()
-        ) 
+        )
         Q_loss = Q_loss_1 + Q_loss_2
         Q_loss.backward()
-        self.critic_optimizer.step()           
+        self.critic_optimizer.step()
         critic_loss = Q_loss.item()
 
         # Update policy by one step of gradient ascent
@@ -296,7 +299,7 @@ class Learner():
         )
         Q1, Q2 = self.local_critic.forward(
             mtobss=mtobss,
-            action=sampled_actions, 
+            action=sampled_actions,
         )
         Q_min = torch.min(Q1, Q2)
         policy_loss = self.actor.cal_loss(
@@ -308,30 +311,30 @@ class Learner():
             alphas=self.log_alpha.exp().detach()
         )
         # ————————————————————————————————————————————————————————
-        # aux_losses = []
+        aux_losses = []
         # tid = random.randint(0, len(self.aux_agent.auxs_lst) - 1)
-        # auxs = aux_agent.auxs[0]
-        # for aux in auxs:
-        #     if aux.class_name == 'CategoricalRewardLoss':
-        #         aux_loss = aux(mtobss, self.actor, self.local_critic, self.critic_optimizer, self.actor_optimizer,actions)
-        #     elif aux.class_name == 'InverseDynamicLoss':
-        #         aux_loss = aux(mtobss, next_mtobss, actions)
-        #     elif aux.class_name == 'CategoricalIntensityLoss':
-        #         aux_loss = aux(mtobss, actions, mtobss, next_mtobss)
-        #     elif aux.class_name == 'MomentChangesLoss':
-        #         aux_loss = aux(self.action_space, actions, mtobss, next_mtobss)
-        #     elif aux.class_name == 'DiverseDynamicLoss':
-        #         aux_loss = aux(mtobss, actions, next_mtobss)
-        #     elif aux.class_name == "MyInverseDynamicLoss":
-        #         aux_loss = aux(mtobss, next_mtobss, actions)
-        #     elif aux.class_name == "DiscountLoss":
-        #         aux_loss = aux(mtobss, actions, rewards)
-        #     else:
-        #         raise NotImplementedError
-        #     # loss += aux_loss.mean()
-        #     aux_losses.append(aux_loss.mean())
+        auxs = aux_agent.auxs
+        for aux in auxs:
+            if aux.class_name == 'CategoricalRewardLoss':
+                aux_loss = aux(mtobss, self.actor, self.local_critic, self.critic_optimizer, self.actor_optimizer,actions)
+            elif aux.class_name == 'InverseDynamicLoss':
+                aux_loss = aux(mtobss, next_mtobss, actions)
+            elif aux.class_name == 'CategoricalIntensityLoss':
+                aux_loss = aux(mtobss, actions, mtobss, next_mtobss)
+            elif aux.class_name == 'MomentChangesLoss':
+                aux_loss = aux(self.action_dim, actions, mtobss, next_mtobss)
+            elif aux.class_name == 'DiverseDynamicLoss':
+                aux_loss = aux(mtobss, actions, next_mtobss)
+            elif aux.class_name == "MyInverseDynamicLoss":
+                aux_loss = aux(mtobss, next_mtobss, actions)
+            elif aux.class_name == "DiscountLoss":
+                aux_loss = aux(mtobss, actions, rewards)
+            else:
+                raise NotImplementedError
+            # loss += aux_loss.mean()
+            aux_losses.append(aux_loss.mean())
 
-        # policy_loss = policy_loss.detach() + aux_loss.mean()
+        policy_loss = policy_loss.detach() + aux_loss.mean()
         # ————————————————————————————————————————————————————————
         policy_loss.backward()
         self.actor_optimizer.step()
@@ -342,8 +345,8 @@ class Learner():
 
         #### MT SAC ####
         # Adjust temperature
-        log_alpha = self.get_log_alpha(mtobss) # log_alpha = (batch_size, 1)
-        loss_log_alpha = -(log_alpha * (log_probs.detach() + self.H_bar)).mean()  
+        log_alpha = self.get_log_alpha(mtobss)  # log_alpha = (batch_size, 1)
+        loss_log_alpha = -(log_alpha * (log_probs.detach() + self.H_bar)).mean()
         loss_log_alpha.backward()
         self.log_alpha_optimizer.step()
         #### MT SAC ####
@@ -358,24 +361,24 @@ class Learner():
         self.critic_optimizer.zero_grad()
         self.actor_optimizer.zero_grad()
         self.log_alpha_optimizer.zero_grad()
-    
+
     def update(self):
         # Randomly sample a batch of trainsitions from D
         mtobss, actions, rewards, next_mtobss, dones = self.memory.sample()
 
         #### MT SAC ####
-        alpha = self.get_log_alpha(mtobss).exp().detach() # alpha corresponding to the task
+        alpha = self.get_log_alpha(mtobss).exp().detach()  # alpha corresponding to the task
         #### MT SAC ####
 
         self.optimizer_zero_grad()
 
         #### update SAC ####
         critic_loss, actor_loss, entropy = self.update_SAC(
-            mtobss, 
-            actions, 
-            rewards, 
-            next_mtobss, 
-            dones, 
+            mtobss,
+            actions,
+            rewards,
+            next_mtobss,
+            dones,
             alpha,
             self.aux_agent
         )
@@ -390,15 +393,15 @@ class Learner():
 
     def get_parameters(self):
         parameters = {
-            'actor' : {k: v.cpu() for k, v in self.actor.state_dict().items()},
+            'actor': {k: v.cpu() for k, v in self.actor.state_dict().items()},
         }
         return parameters
 
     def run(self):
         # initial parameter copy
         self.server.set('update_iteration', _pickle.dumps(-1))
-        self.server.set('parameters', _pickle.dumps(self.get_parameters())) # parameters for state_encoder, actor
-        
+        self.server.set('parameters', _pickle.dumps(self.get_parameters()))  # parameters for state_encoder, actor
+
         self.wait_until_memoryReady()
         self.my_print('######################### Start train #########################')
 
@@ -409,25 +412,25 @@ class Learner():
         critic_loss_list = []
         entropy_list = []
 
-        for update_iteration in itertools.count():            
+        for update_iteration in itertools.count():
             update_iteration = update_iteration + self.update_iteration if update_iteration == 0 else update_iteration
 
-            if update_iteration % self.update_delay != 0 : 
+            if update_iteration % self.update_delay != 0:
                 continue
 
             critic_loss, actor_loss, entropy = self.update()
 
             self.server.set('update_iteration', _pickle.dumps(update_iteration))
-            self.server.set('parameters', _pickle.dumps(self.get_parameters())) # parameters for state_encoder, actor
+            self.server.set('parameters', _pickle.dumps(self.get_parameters()))  # parameters for state_encoder, actor
 
             if self.write_mode:
                 actor_loss_list.append(actor_loss)
                 critic_loss_list.append(critic_loss)
-                entropy_list.append(entropy)                
+                entropy_list.append(entropy)
                 self.push_log(
-                    copy.deepcopy(update_iteration), 
-                    copy.deepcopy(critic_loss), 
-                    copy.deepcopy(actor_loss), 
+                    copy.deepcopy(update_iteration),
+                    copy.deepcopy(critic_loss),
+                    copy.deepcopy(actor_loss),
                     copy.deepcopy(entropy)
                 )
                 if update_iteration % self.print_period == 0:
