@@ -120,6 +120,37 @@ class MomentChangesLoss(LossBase):
         return F.mse_loss(self.fc_z(self.fc_h(temp)), state)
 
 
+class reward_attack(LossBase):
+
+    def __init__(self, name, tid, args, action_space, reward_scale, alpha, next_log_probs):
+        super().__init__(name, tid, args, action_space, args.conv_output_size)
+        self.fc_z = nn.Linear(args.state_dim + 10, args.hidden_size)
+        self.hc_z = nn.Linear(args.hidden_size, action_space)
+
+        self.reward_scale = reward_scale
+
+        self.alpha = alpha
+
+        self.next_log_probs = next_log_probs
+
+    def forward(self, critic_value, rewards, state, actions):
+        temp = torch.cat([actions, state], dim=1)
+        aux_critic_loss = F.mse_loss(self.fc_z(self.fc_h(temp)), state)
+        y = self.reward_scale * rewards * (-1) + self.gamma * (
+            aux_critic_loss - self.alpha * self.next_log_probs
+        )
+        return F.mse_loss(y, critic_value)
+
+
+# class action_attack(LossBase):
+#     def __init__(self, name, tid, args, action_space):
+#         super().__init__(name, tid, args, action_space, args.conv_output_size)
+#         self.fc_z = nn.Linear(args.state_dim + 10, args.hidden_size)
+#         self.hc_z = nn.Linear(args.hidden_size, action_space)
+#
+#     def forward(self, rewards, state, actions):
+
+
 def get_loss_by_name(name):
     if name == 'inverse_dynamic' or name == 'id':
         """
