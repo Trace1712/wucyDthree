@@ -30,7 +30,7 @@ if __name__ == '__main__':
     is_train = True  ############## you need to set
     # is_train = False ############## you need to set
 
-    num_cpus = 2  ############## you need to set
+    num_cpus = 4  ############## you need to set
     num_gpus = 0  ############## you need to set
     Player = ray.remote(num_cpus=1, num_gpus=0)(Player)  ############## you need to set
     Learner = ray.remote(num_cpus=1, num_gpus=0)(Learner)  ############## you need to set
@@ -45,7 +45,7 @@ if __name__ == '__main__':
     ############## you need to set ##############
 
     networks = []
-    aux = ["cr"]
+    aux = ["InverseDynamic"]
     if is_train:
         for task_idx_list in task_distributions:
             networks.append(
@@ -58,7 +58,14 @@ if __name__ == '__main__':
                     run_id=run_id
                 )
             )
-        networks.append(Learner.remote(train_classes, train_tasks, cfg_path, save_period=20000, action_dim=4, aux_lst=aux))
+        networks.append(Learner.remote(train_classes,
+                                       train_tasks,
+                                       cfg_path,
+                                       save_period=20,
+                                       action_dim=4,
+                                       args=args,
+                                       aux_lst=aux,
+                                       run_id=run_id))
         print('Learner added')
     else:
         task_idx_list = [4]  ############## you need to set

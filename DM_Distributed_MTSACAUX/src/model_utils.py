@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from modules import Conv2d
-
 
 class HeadBase(nn.Module):
     def __init__(self, args, action_space):
@@ -14,16 +12,16 @@ class HeadBase(nn.Module):
         # self.conv_output_size = conv_output_size
 
 
-class ResNetBlock(nn.Module):
-    def __init__(self, channel, kernel_size):
-        super().__init__()
-        self.conv1 = Conv2d(channel, channel, kernel_size)
-        self.conv2 = Conv2d(channel, channel, kernel_size)
-
-    def forward(self, x):
-        y = F.relu(self.conv1(x))
-        y = self.conv2(y)
-        return F.relu(y + x)
+# class ResNetBlock(nn.Module):
+#     def __init__(self, channel, kernel_size):
+#         super().__init__()
+#         self.conv1 = Conv2d(channel, channel, kernel_size)
+#         self.conv2 = Conv2d(channel, channel, kernel_size)
+#
+#     def forward(self, x):
+#         y = F.relu(self.conv1(x))
+#         y = self.conv2(y)
+#         return F.relu(y + x)
 
 
 # Factorised NoisyLinear layer with bias

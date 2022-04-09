@@ -11,22 +11,21 @@ def dist(a, b):
 
 
 class LossBase(HeadBase):
-    def __init__(self, name, tid, args, action_space, conv_output_size):
+    def __init__(self, name, tid, args, action_space):
         super().__init__(args, action_space)
         self.class_name = self.__class__.__name__
         self.name = name
         self.tid = tid
-        self.conv_output_size = conv_output_size
 
 
 class DiverseDynamicLoss(LossBase):
     # """
     # 正向动力学模型辅助任务
     # """
-    def __init__(self, name, tid, args, action_space):
-        super().__init__(name, tid, args, action_space, args.conv_output_size)
-        self.fc_h = nn.Linear(args.state_dim + 10 + action_space, args.hidden_size)
-        self.fc_z = nn.Linear(args.hidden_size, args.state_dim + 10)
+    def __init__(self, name, tid, args, action_space, state_dim, hidden_size, num_task):
+        super().__init__(name, tid, args, action_space)
+        self.fc_h = nn.Linear(state_dim + num_task + action_space, hidden_size)
+        self.fc_z = nn.Linear(hidden_size, state_dim + 10)
 
     def forward(self, state, action, next_state):
         temp = torch.cat([action, state], dim=1)
@@ -37,10 +36,10 @@ class MyInverseDynamicLoss(LossBase):
     # """
     # 逆向动力学模型辅助任务
     # """
-    def __init__(self, name, tid, args, action_space):
-        super().__init__(name, tid, args, action_space, args.conv_output_size)
-        self.fc_h = nn.Linear(args.state_dim + 10 + action_space, args.hidden_size)
-        self.fc_z = nn.Linear(args.hidden_size, args.state_dim + 10)
+    def __init__(self, name, tid, args, action_space, state_dim, hidden_size, num_task):
+        super().__init__(name, tid, args, action_space)
+        self.fc_h = nn.Linear(state_dim + num_task + action_space, hidden_size)
+        self.fc_z = nn.Linear(hidden_size, state_dim + num_task)
 
     def forward(self, state, next_state, actions):
         temp = torch.cat([actions, next_state], dim=1)
@@ -48,10 +47,10 @@ class MyInverseDynamicLoss(LossBase):
 
 
 class InverseDynamicLoss(LossBase):
-    def __init__(self, name, tid, args, action_space):
-        super().__init__(name, tid, args, action_space, args.conv_output_size)
-        self.fc_h = nn.Linear((args.state_dim + 10) * 2, args.hidden_size)
-        self.fc_z = nn.Linear(args.hidden_size, action_space)
+    def __init__(self, name, tid, args, action_space, state_dim, hidden_size, num_task):
+        super().__init__(name, tid, args, action_space)
+        self.fc_h = nn.Linear((state_dim + num_task) * 2, hidden_size)
+        self.fc_z = nn.Linear(hidden_size, action_space)
 
     def forward(self, feat1, feat2, actions):
         actions, _ = torch.max(actions, dim=1, keepdim=True)
@@ -61,10 +60,10 @@ class InverseDynamicLoss(LossBase):
 
 
 class AttackRewardLoss(LossBase):
-    def __init__(self, name, tid, args, action_space):
-        super().__init__(name, tid, args, action_space, args.conv_output_size)
-        self.fc_z = nn.Linear(args.state_dim + 10, args.hidden_size)
-        self.hc_z = nn.Linear(args.hidden_size, action_space)
+    def __init__(self, name, tid, args, action_space, state_dim, hidden_size, num_task):
+        super().__init__(name, tid, args, action_space)
+        self.fc_z = nn.Linear(state_dim + num_task, hidden_size)
+        self.hc_z = nn.Linear(hidden_size, action_space)
 
     def forward(self, state, actor, critic, critic_optim, actor_optim, actions):
         # Backward compatibility, use values read in config file
@@ -111,7 +110,7 @@ class MomentChangesLoss(LossBase):
         self.hidden_cell = (torch.zeros(1, 1, self.hidden_layer_size),
                             torch.zeros(1, 1, self.hidden_layer_size))
 
-        super().__init__(name, tid, args, action_space, args.conv_output_size)
+        super().__init__(name, tid, args, action_space)
         self.fc_h = nn.Linear(args.state_dim + 10 + action_space, args.hidden_size)
         self.fc_z = nn.Linear(args.hidden_size, args.state_dim + 10)
 
@@ -120,10 +119,10 @@ class MomentChangesLoss(LossBase):
         return F.mse_loss(self.fc_z(self.fc_h(temp)), state)
 
 
-class reward_attack(LossBase):
+class RewardAttack(LossBase):
 
     def __init__(self, name, tid, args, action_space, reward_scale, alpha, next_log_probs):
-        super().__init__(name, tid, args, action_space, args.conv_output_size)
+        super().__init__(name, tid, args, action_space)
         self.fc_z = nn.Linear(args.state_dim + 10, args.hidden_size)
         self.hc_z = nn.Linear(args.hidden_size, action_space)
 
@@ -142,41 +141,22 @@ class reward_attack(LossBase):
         return F.mse_loss(y, critic_value)
 
 
-# class action_attack(LossBase):
-#     def __init__(self, name, tid, args, action_space):
-#         super().__init__(name, tid, args, action_space, args.conv_output_size)
-#         self.fc_z = nn.Linear(args.state_dim + 10, args.hidden_size)
-#         self.hc_z = nn.Linear(args.hidden_size, action_space)
-#
-#     def forward(self, rewards, state, actions):
-
-
 def get_loss_by_name(name):
-    if name == 'inverse_dynamic' or name == 'id':
-        """
-        hidden size
-        """
+    if name == 'InverseDynamic':
+        # 预测action（正向任务）
         return InverseDynamicLoss
-    elif name == 'attack_reward' or name == 'ar':
-        """
-        模型攻击奖励（鲁棒任务）
-        """
-        return AttackRewardLoss
-    elif name == 'moment_changes' or name == 'mc':
-        """
-        瞬时变化奖励（正向任务）
-        """
-        return MomentChangesLoss
-    elif "MyInverseDynamicLoss" == name:
-        """
-        逆向动力学模型（正向任务）
-        """
+    # elif name == 'MomentChanges':
+    #     # 瞬时变化奖励（鲁棒任务）
+    #     return MomentChangesLoss
+    elif name == "MyInverseDynamicLoss":
+        # 逆向动力学模型（正向任务）
         return MyInverseDynamicLoss
-    elif "DiverseDynamicLoss" == name:
-        """
-        正向动力学模型（正向任务）
-        """
+    elif name == "DiverseDynamicLoss":
+        # 正向动力学模型（正向任务）
         return DiverseDynamicLoss
+    elif name == "RewardAttack":
+        # 模型攻击奖励（鲁棒任务）
+        return RewardAttack
 
 
 def get_aux_loss(name, *args):

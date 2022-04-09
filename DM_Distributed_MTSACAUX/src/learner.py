@@ -29,7 +29,8 @@ class Learner():
                  checkpoint_path=None,
                  action_dim=None,
                  aux_lst=None,
-                 args=None
+                 args=None,
+                 run_id=None
                  ):
 
         self.train_classes = train_classes
@@ -38,7 +39,7 @@ class Learner():
         self.cfg = cfg_read(path=cfg_path)
         self.actor_cfg = self.cfg['actor']
         self.critic_cfg = self.cfg['critic']
-        self.set_cfg_parameters(save_period, write_mode)
+        self.set_cfg_parameters(save_period, write_mode, run_id)
         self.aux_agent = Auxagent(action_dim, aux_lst, args)
         self.action_dim = action_dim
         self.server = redis.StrictRedis(host='localhost', password='5241590000000000')
@@ -61,12 +62,14 @@ class Learner():
 
         self.logger = Logger(writer=self.writer, cfg_path=cfg_path, server=self.server)
         self.logger.start()  # start thread's activity
-
         if checkpoint_path is not None:
             self.load_checkpoint(checkpoint_path)
             print('######## load checkpoint completely ########')
 
-    def set_cfg_parameters(self, save_period, write_mode):
+    def set_cfg_parameters(self, save_period, write_mode, run_id):
+        self.run_id = run_id
+        self.attack_epsilon = 0.2
+        self.attack_alpha = 0.02
         self.gamma = self.cfg['gamma']
         self.lr_actor = self.actor_cfg['lr_actor']
         self.lr_critic = self.critic_cfg['lr_critic']
@@ -92,11 +95,11 @@ class Learner():
         self.max_episode_time = int(self.cfg['max_episode_time'])
 
         self.log_file = './log/log_DM_Distributed_MTSACAUX/DM_Distributed_MTSACAUX_log_{}.txt'.format(
-            self.datetime
+            self.run_id
         )
 
         self.save_model_path = 'saved_models/DM_Distributed_MTSACAUX/{}/'.format(
-            self.datetime
+            self.run_id
         )
 
         self.save_period = save_period
@@ -106,11 +109,12 @@ class Learner():
         self.write_mode = write_mode
         if self.write_mode:
             self.writer = SummaryWriter(
-                './log/log_DM_Distributed_MTSACAUX/{}'.format(self.datetime)
+                './log/log_DM_Distributed_MTSACAUX/{}'.format(self.run_id)
             )
 
     def build_model(self):
         self.actor = Actor(self.actor_cfg, self.num_tasks)
+        self.distribute_actor = Actor(self.actor_cfg, self.num_tasks)
 
         self.local_critic = Critic(self.critic_cfg, self.num_tasks)
         self.target_critic = Critic(self.critic_cfg, self.num_tasks)
@@ -274,8 +278,16 @@ class Learner():
                 mtobss=next_mtobss,
                 action=sampled_next_actions
             )
+
+            Q_target_1_robust, Q_target_2_robust = self.target_critic.forward(
+                mtobss=self.distribute_state(next_mtobss),
+                action=self.distribute_action(next_mtobss)
+            )
             y = self.reward_scale * rewards + self.gamma * (1 - dones) * (
                 torch.min(Q_target_1, Q_target_2).detach() - alpha * next_log_probs
+            )
+            y_robust = self.reward_scale * rewards + self.gamma * (1 - dones) * (
+                torch.min(Q_target_1_robust, Q_target_2_robust).detach() - alpha * next_log_probs
             )
 
         # Update Q-functions by one step of gradient descent   
@@ -286,7 +298,18 @@ class Learner():
             use_weighted_loss=self.use_weighted_loss,
             alphas=self.log_alpha.exp().detach()
         )
-        Q_loss = Q_loss_1 + Q_loss_2
+
+        Q_loss_robust_1, Q_loss_robust_2 = self.local_critic.cal_loss(
+            mtobss=self.distribute_state(mtobss),
+            action=self.distribute_action(mtobss),
+            td_target_values=y_robust,
+            use_weighted_loss=self.use_weighted_loss,
+            alphas=self.log_alpha.exp().detach()
+        )
+        normal_critic_loss = Q_loss_1 + Q_loss_2
+        robust_critic_loss = Q_loss_robust_1 + Q_loss_robust_2
+        robust_paramer = robust_critic_loss / normal_critic_loss
+        Q_loss = normal_critic_loss + robust_critic_loss * robust_paramer
         Q_loss.backward()
         self.critic_optimizer.step()
         critic_loss = Q_loss.item()
@@ -314,27 +337,26 @@ class Learner():
         aux_losses = []
         # tid = random.randint(0, len(self.aux_agent.auxs_lst) - 1)
         auxs = aux_agent.auxs
+        aux_loss = []
         for aux in auxs:
-            if aux.class_name == 'CategoricalRewardLoss':
-                aux_loss = aux(mtobss, self.actor, self.local_critic, self.critic_optimizer, self.actor_optimizer,actions)
-            elif aux.class_name == 'InverseDynamicLoss':
-                aux_loss = aux(mtobss, next_mtobss, actions)
-            elif aux.class_name == 'CategoricalIntensityLoss':
-                aux_loss = aux(mtobss, actions, mtobss, next_mtobss)
-            elif aux.class_name == 'MomentChangesLoss':
-                aux_loss = aux(self.action_dim, actions, mtobss, next_mtobss)
-            elif aux.class_name == 'DiverseDynamicLoss':
+            if aux.class_name == 'MomentChangesLoss':
+                # 瞬时变化奖励（鲁棒任务）
                 aux_loss = aux(mtobss, actions, next_mtobss)
-            elif aux.class_name == "MyInverseDynamicLoss":
+            elif aux.class_name == 'InverseDynamicLoss':
+                # 模型攻击奖励（鲁棒任务）
                 aux_loss = aux(mtobss, next_mtobss, actions)
-            elif aux.class_name == "DiscountLoss":
-                aux_loss = aux(mtobss, actions, rewards)
+            elif aux.class_name == 'MyInverseDynamicLoss':
+                # 逆向动力学模型（正向任务）
+                aux_loss = aux(mtobss, next_mtobss, actions)
+            elif aux.class_name == 'DiverseDynamicLoss':
+                # 正向动力学模型（正向任务）
+                aux_loss = aux(mtobss, actions, next_mtobss)
             else:
                 raise NotImplementedError
             # loss += aux_loss.mean()
             aux_losses.append(aux_loss.mean())
 
-        policy_loss = policy_loss.detach() + aux_loss.mean()
+        policy_loss = policy_loss.detach() + aux_loss.mean() * robust_paramer
         # ————————————————————————————————————————————————————————
         policy_loss.backward()
         self.actor_optimizer.step()
@@ -366,13 +388,13 @@ class Learner():
         # Randomly sample a batch of trainsitions from D
         mtobss, actions, rewards, next_mtobss, dones = self.memory.sample()
 
-        #### MT SAC ####
+        # MT SAC ####
         alpha = self.get_log_alpha(mtobss).exp().detach()  # alpha corresponding to the task
-        #### MT SAC ####
+        # MT SAC ####
 
         self.optimizer_zero_grad()
 
-        #### update SAC ####
+        # update SAC ####
         critic_loss, actor_loss, entropy = self.update_SAC(
             mtobss,
             actions,
@@ -446,3 +468,28 @@ class Learner():
 
             if update_iteration % self.save_period == 0:
                 self.save_checkpoint(update_iteration)
+
+    def distribute_state(self, state):
+        self.distribute_actor.mu_log_std_layer.load_state_dict(self.actor.mu_log_std_layer)
+        criterion = torch.nn.MSELoss()
+        gt_action = self.distribute_actor.actor(state).clone().detach()
+        ori_state = torch.tensor(state, torch.float64)
+        for _ in range(10):
+            state = torch.tensor(state, torch.float64)
+            action = self.distribute_actor.get_action(state)
+            # action = self.action_normalize(action)
+
+            loss = -criterion(action, gt_action)
+            self.distribute_actor.mu_log_std_layer.zero_grad()
+            loss.backward()
+            adv_state = state - self.attack_alpha * state.grad.sign()
+            state = torch.min(torch.max(adv_state, ori_state - self.attack_epsilon), ori_state + self.attack_epsilon)
+        return to_np(state)
+
+    def distribute_action(self, state):
+        self.distribute_actor.mu_log_std_layer.load_state_dict(self.actor.mu_log_std_layer)
+        return self.distribute_actor.get_action(state)
+
+
+def to_np(t):
+    return t.cpu().detach().numpy()

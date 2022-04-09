@@ -45,6 +45,8 @@ class Player():
         self.run_id = run_id
         self.write_mode = write_mode
         self.server = redis.StrictRedis(host='localhost', password='5241590000000000')
+        import os
+        os.makedirs("../model/{}".format(self.run_id), exist_ok=True)
         for key in self.server.scan_iter():
             self.server.delete(key)
 
@@ -140,7 +142,7 @@ class Player():
     def eval_policy(self, task_idx, eval_episodes=5, step=100):
         avg_reward = 0.
         env_eval = suite.load(domain_name=self.train_classes, task_name=self.train_tasks[task_idx])
-        info = pd.read_csv("../model/{}-{}.csv".format(self.train_classes, self.train_tasks[task_idx]))
+        info = pd.read_csv("../model/{}/{}-{}.csv".format(self.run_id, self.train_classes, self.train_tasks[task_idx]))
         num = info["reward"].tolist()
         for i in range(eval_episodes):
             time_step = env_eval.reset()
@@ -287,7 +289,7 @@ class Player():
             f = pd.DataFrame(columns=col_name, data=None)
             # import os
             # os.m
-            f.to_csv("../model/{}-{}.csv".format(self.train_classes, task), index=False)
+            f.to_csv("../model/{}/{}-{}.csv".format(self.run_id, self.train_classes, task), index=False)
 
         while True:
 

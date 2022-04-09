@@ -2,7 +2,7 @@
     "use_weighted_loss" : true,
     "num_tasks": 3,
     "device" : "cpu",
-    "buffer_size" : 1e6,
+    "buffer_size" : 100,
     "reward_scale" : 1,
     "batch_size" : 1280,
     "log_alpha" : 0,
