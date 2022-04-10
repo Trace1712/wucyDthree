@@ -63,6 +63,8 @@ if __name__ == '__main__':
                                        cfg_path,
                                        save_period=20,
                                        action_dim=4,
+                                       state_dim=24,
+                                       num_task=3,
                                        args=args,
                                        aux_lst=aux,
                                        run_id=run_id))

@@ -28,6 +28,8 @@ class Learner():
                  save_period=50000,
                  checkpoint_path=None,
                  action_dim=None,
+                 state_dim=None,
+                 num_task=None,
                  aux_lst=None,
                  args=None,
                  run_id=None
@@ -40,7 +42,8 @@ class Learner():
         self.actor_cfg = self.cfg['actor']
         self.critic_cfg = self.cfg['critic']
         self.set_cfg_parameters(save_period, write_mode, run_id)
-        self.aux_agent = Auxagent(action_dim, aux_lst, args)
+        args.reward_scale = self.reward_scale
+        self.aux_agent = Auxagent(action_dim, aux_lst, args, state_dim, 200, num_task)
         self.action_dim = action_dim
         self.server = redis.StrictRedis(host='localhost', password='5241590000000000')
         for key in self.server.scan_iter():
@@ -351,6 +354,9 @@ class Learner():
             elif aux.class_name == 'DiverseDynamicLoss':
                 # 正向动力学模型（正向任务）
                 aux_loss = aux(mtobss, actions, next_mtobss)
+            elif aux.class_name == 'RewardAttack':
+                # 模型攻击奖励（鲁棒任务）
+                aux_loss = aux(y, rewards, mtobss, actions, alpha, next_log_probs)
             else:
                 raise NotImplementedError
             # loss += aux_loss.mean()

@@ -59,84 +59,77 @@ class InverseDynamicLoss(LossBase):
         return F.cross_entropy(a, actions.squeeze(1).long(), reduction='none')
 
 
-class AttackRewardLoss(LossBase):
+class robustReawardLoss(LossBase):
     def __init__(self, name, tid, args, action_space, state_dim, hidden_size, num_task):
         super().__init__(name, tid, args, action_space)
         self.fc_z = nn.Linear(state_dim + num_task, hidden_size)
         self.hc_z = nn.Linear(hidden_size, action_space)
 
-    def forward(self, state, actor, critic, critic_optim, actor_optim, actions):
-        # Backward compatibility, use values read in config file
-        attack_epsilon = 0.075
-        attack_stepsize = 0.0075
-        attack_iteration = 1
-        dtype = state.dtype
-        state = torch.tensor(state, requires_grad=True)  # convert to tensor
+        self.attack_epsilon = 0.075
+        self.attack_stepsize = 0.0075
+        self.attack_iteration = 2
+
+    def forward(self, state, action):
         # ori_state = self.normalize(state.data)
         ori_state_tensor = torch.tensor(state.clone().detach(), dtype=torch.float32)
         # random start
-        state = torch.tensor(state, dtype=torch.float32) + ori_state_tensor  # normalized
-        # self.attack_epsilon = 0.1
-        state_ub = ori_state_tensor + attack_epsilon
-        state_lb = ori_state_tensor - attack_epsilon
-        for _ in range(attack_iteration):
-            state = torch.tensor(state, dtype=torch.float32, requires_grad=True)
-            action, _ = actor(state)
+        criterion = torch.nn.MSELoss()
+        state = torch.tensor(state, dtype=torch.float32, requires_grad=True)
 
-            qval, _ = critic.forward(ori_state_tensor, action)
-            loss = torch.mean(qval)
+        for i in range(self.attack_iteration):
+            gt_action = self.fc_z(state)
+            loss = -criterion(action, gt_action)
+            self.zero_grad()
             loss.backward()
-            adv_state = state - attack_stepsize * state.grad.sign()
-            # adv_state = self.normalize(state) + 0.01 * state.grad.sign()
-            state = torch.min(torch.max(adv_state, state_lb), state_ub)
-            # state =  torch.max(torch.min(adv_state, self.state_max), self.state_min)
-        critic_optim.zero_grad()
-        actor_optim.zero_grad()
-        raction = self.hc_z(self.fc_z(state))
-        return F.mse_loss(raction, actions)
+            adv_state = state - self.attack_alpha * state.grad.sign()
+            state = torch.min(torch.max(adv_state, ori_state_tensor - self.attack_epsilon),
+                              ori_state_tensor + self.attack_epsilon)
+
+        return F.mse_loss(gt_action, action)
 
     def to_np(self, t):
         return t.cpu().detach().numpy()
 
 
 class MomentChangesLoss(LossBase):
-    def __init__(self, name, tid, args, action_space):
-        self.hidden_layer_size = args.hidden_size
+    def __init__(self, name, tid, args, action_space, state_dim, hidden_size, num_task):
+        super().__init__(name, tid, args, action_space)
 
-        self.lstm = nn.LSTM(action_space, args.hidden_size)
-        self.linear = nn.Linear(args.hidden_size, 1)
+        self.lstm = nn.LSTM(state_dim, hidden_size)
+        self.linear = nn.Linear(hidden_size, action_space)
 
         # 初始化隐含状态及细胞状态C，hidden_cell变量包含先前的隐藏状态和单元状态
-        self.hidden_cell = (torch.zeros(1, 1, self.hidden_layer_size),
-                            torch.zeros(1, 1, self.hidden_layer_size))
+        self.hidden_cell = (torch.zeros(1, 1, hidden_size),
+                            torch.zeros(1, 1, hidden_size))
 
-        super().__init__(name, tid, args, action_space)
         self.fc_h = nn.Linear(args.state_dim + 10 + action_space, args.hidden_size)
         self.fc_z = nn.Linear(args.hidden_size, args.state_dim + 10)
 
     def forward(self, state, actions, next_state):
-        temp = torch.cat([actions, next_state], dim=1)
-        return F.mse_loss(self.fc_z(self.fc_h(temp)), state)
+        # lstm_out, self.hidden_cell = self.lstm(input_seq.view(len(input_seq), 1, -1), self.hidden_cell)
+        # # lstm的输出是当前时间步的隐藏状态ht和单元状态ct以及输出lstm_out
+        # # 按照lstm的格式修改input_seq的形状，作为linear层的输入
+        # predictions = self.linear(lstm_out)
+        # return predictions[-1]  # 返回predictions的最后一个元素
+        # temp = torch.cat([actions, next_state], dim=1)
+        # return F.mse_loss(self.fc_z(self.fc_h(temp)), state)
+        pass
 
 
-class RewardAttack(LossBase):
+class RewardAttackLoss(LossBase):
 
-    def __init__(self, name, tid, args, action_space, reward_scale, alpha, next_log_probs):
+    def __init__(self, name, tid, args, action_space, state_dim, hidden_size, num_task):
         super().__init__(name, tid, args, action_space)
-        self.fc_z = nn.Linear(args.state_dim + 10, args.hidden_size)
-        self.hc_z = nn.Linear(args.hidden_size, action_space)
+        self.fc_z = nn.Linear(state_dim + num_task, hidden_size)
+        self.hc_z = nn.Linear(hidden_size, action_space)
 
-        self.reward_scale = reward_scale
+        self.reward_scale = args.reward_scale
 
-        self.alpha = alpha
-
-        self.next_log_probs = next_log_probs
-
-    def forward(self, critic_value, rewards, state, actions):
+    def forward(self, critic_value, rewards, state, actions, alpha, next_log_probs):
         temp = torch.cat([actions, state], dim=1)
         aux_critic_loss = F.mse_loss(self.fc_z(self.fc_h(temp)), state)
         y = self.reward_scale * rewards * (-1) + self.gamma * (
-            aux_critic_loss - self.alpha * self.next_log_probs
+            aux_critic_loss - alpha * next_log_probs
         )
         return F.mse_loss(y, critic_value)
 
@@ -156,7 +149,10 @@ def get_loss_by_name(name):
         return DiverseDynamicLoss
     elif name == "RewardAttack":
         # 模型攻击奖励（鲁棒任务）
-        return RewardAttack
+        return RewardAttackLoss
+    elif name == "robustReawardLoss":
+        # 模型攻击状态（鲁棒任务）
+        return robustReawardLoss
 
 
 def get_aux_loss(name, *args):

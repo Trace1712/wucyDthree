@@ -9,7 +9,7 @@ from model_utils import HeadBase, NoisyLinear
 
 
 class Auxagent(nn.Module):
-    def __init__(self, action_dim, aux_lst, args):
+    def __init__(self, action_dim, aux_lst, args, state_dim, hidden_size, num_task):
         # convs = [Conv(state_dim, action_dim) for i in range(10)]
         super().__init__()
         auxs = []
@@ -18,7 +18,7 @@ class Auxagent(nn.Module):
                 auxs.append(nn.ModuleList([]))
                 continue
             head_aux = nn.ModuleList(
-                [get_aux_loss(aux_name, i, args, action_dim) for aux_name in
+                [get_aux_loss(aux_name, i, args, action_dim, state_dim, hidden_size, num_task) for aux_name in
                  aux_names.split('+')]
             )
             auxs.append(head_aux)
